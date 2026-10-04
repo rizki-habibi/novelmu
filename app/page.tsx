@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ChevronLeft, ChevronRight, Heart, Menu, Sparkles, X } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient } from "@/lib/supabase";
 
 type Chapter = {
   id: string;
@@ -27,34 +27,58 @@ export default function Home() {
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadNovel() {
-      const { data: storyData, error: storyError } = await supabase
-        .from("novel_stories")
-        .select("id,title,subtitle,author")
-        .eq("slug", "perjalanan-rizki-habibi")
-        .eq("status", "published")
-        .single();
+      try {
+        const supabase = getSupabaseClient();
 
-      if (storyError || !storyData) {
-        setLoading(false);
-        return;
+        const { data: storyData, error: storyError } = await supabase
+          .from("novel_stories")
+          .select("id,title,subtitle,author")
+          .eq("slug", "perjalanan-rizki-habibi")
+          .eq("status", "published")
+          .single();
+
+        if (storyError) throw storyError;
+        if (!storyData) throw new Error("Cerita tidak ditemukan.");
+
+        const { data: chapterData, error: chapterError } = await supabase
+          .from("novel_chapters")
+          .select("id,chapter_number,chapter_label,title,excerpt,content,mood")
+          .eq("story_id", storyData.id)
+          .eq("published", true)
+          .order("sort_order", { ascending: true });
+
+        if (chapterError) throw chapterError;
+        if (!chapterData?.length) throw new Error("Belum ada chapter yang diterbitkan.");
+
+        if (!cancelled) {
+          setStory(storyData);
+          setChapters(chapterData);
+          setLoadError(null);
+          setLoading(false);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "Cerita gagal dimuat. Periksa koneksi Supabase."
+          );
+          setLoading(false);
+        }
       }
-
-      const { data: chapterData } = await supabase
-        .from("novel_chapters")
-        .select("id,chapter_number,chapter_label,title,excerpt,content,mood")
-        .eq("story_id", storyData.id)
-        .eq("published", true)
-        .order("sort_order", { ascending: true });
-
-      setStory(storyData);
-      setChapters(chapterData ?? []);
-      setLoading(false);
     }
 
     loadNovel();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const chapter = chapters[active];
@@ -86,11 +110,14 @@ export default function Home() {
     );
   }
 
-  if (!story || !chapter) {
+  if (loadError || !story || !chapter) {
     return (
       <main className="loading">
         <BookOpen size={36} />
-        <p>Cerita belum tersedia.</p>
+        <p>{loadError ?? "Cerita belum tersedia."}</p>
+        <small>
+          Pastikan variabel Supabase di Vercel sudah diisi dan deployment dibuat ulang.
+        </small>
       </main>
     );
   }
